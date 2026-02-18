@@ -2,6 +2,9 @@ package go_harness
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -231,6 +234,55 @@ func TestRustGuestTracesReceiverE2E(t *testing.T) {
 	}
 }
 
+func TestRustGuestSocketExporterE2E(t *testing.T) {
+	if os.Getenv("OTELWASM_RUN_SOCKET_E2E") != "1" {
+		t.Skip("socket e2e test disabled; set OTELWASM_RUN_SOCKET_E2E=1 to enable")
+	}
+
+	wasmPath := os.Getenv("OTELWASM_SOCKET_EXPORTER_WASM_PATH")
+	if wasmPath == "" {
+		t.Fatal("OTELWASM_SOCKET_EXPORTER_WASM_PATH must be set when socket e2e is enabled")
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("socket e2e skipped: failed to bind local listener: %v", err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		case "/fail":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("not ready"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	ctx := context.Background()
+
+	t.Run("successful healthcheck", func(t *testing.T) {
+		plugin := newSocketExporterPlugin(t, ctx, wasmPath, server.URL+"/ok")
+		input := newTraces("socket-ok")
+		if _, err := plugin.ConsumeTraces(ctx, input); err != nil {
+			t.Fatalf("otelwasm_consume_traces unexpectedly failed: %v", err)
+		}
+	})
+
+	t.Run("non-2xx healthcheck fails", func(t *testing.T) {
+		plugin := newSocketExporterPlugin(t, ctx, wasmPath, server.URL+"/fail")
+		input := newTraces("socket-fail")
+		if _, err := plugin.ConsumeTraces(ctx, input); err == nil {
+			t.Fatal("expected otelwasm_consume_traces to fail on non-2xx healthcheck")
+		}
+	})
+}
+
 func newTraces(spanName string) ptrace.Traces {
 	td := ptrace.NewTraces()
 	rs := td.ResourceSpans().AppendEmpty()
@@ -238,4 +290,39 @@ func newTraces(spanName string) ptrace.Traces {
 	span := ss.Spans().AppendEmpty()
 	span.SetName(spanName)
 	return td
+}
+
+func newSocketExporterPlugin(t *testing.T, ctx context.Context, wasmPath, healthcheckURL string) *wasmplugin.WasmPlugin {
+	t.Helper()
+
+	cfg := &wasmplugin.Config{
+		Path: wasmPath,
+		PluginConfig: wasmplugin.PluginConfig{
+			"healthcheck_url": healthcheckURL,
+		},
+	}
+	cfg.RuntimeConfig.Default()
+
+	plugin, err := wasmplugin.NewWasmPlugin(ctx, cfg, []string{
+		"otelwasm_start",
+		"otelwasm_shutdown",
+		"otelwasm_consume_traces",
+	})
+	if err != nil {
+		t.Fatalf("new wasm plugin: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = plugin.Shutdown(context.Background())
+	})
+
+	startRes, err := plugin.ProcessFunctionCall(ctx, "otelwasm_start", &wasmplugin.Stack{
+		PluginConfigJSON: plugin.PluginConfigJSON,
+	})
+	if err != nil {
+		t.Fatalf("otelwasm_start failed: %v", err)
+	}
+	if len(startRes) == 0 || startRes[0] != 0 {
+		t.Fatalf("otelwasm_start returned non-success status: %v", startRes)
+	}
+	return plugin
 }

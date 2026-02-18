@@ -8,6 +8,7 @@ Rust SDK and sample guest WebAssembly module for the otelwasm ABI v1 shape.
 - `examples/traces-processor-guest`: Example traces processor guest module (`cdylib`) built to WASM.
 - `examples/traces-exporter-guest`: Example traces exporter guest module (non-network policy/export check).
 - `examples/traces-receiver-guest`: Example traces receiver guest module (synthetic traces emitter).
+- `examples/traces-socket-exporter-guest`: Optional socket-based exporter example for environments where the WASI socket extension is available.
 - `e2e/go_harness`: End-to-end tests that load the Rust guest through `github.com/otelwasm/otelwasm/wasmplugin`.
 
 ## Build the guest WASM module
@@ -33,6 +34,12 @@ This command runs:
 
 E2E tests expect a sibling checkout of the `otelwasm` repository at `../otelwasm` so the
 Go harness can resolve `github.com/otelwasm/otelwasm/wasmplugin` via `replace`.
+
+Socket E2E tests are gated and disabled by default. Enable them with:
+
+```bash
+OTELWASM_RUN_SOCKET_E2E=1 cargo test -p otelwasm-rust-sdk --tests
+```
 
 ## Example processor behavior
 

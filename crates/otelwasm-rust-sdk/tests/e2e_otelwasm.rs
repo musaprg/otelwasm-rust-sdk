@@ -1,3 +1,4 @@
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -46,6 +47,15 @@ fn e2e_otelwasm_can_run_rust_guest() {
     build_wasm_package(&workspace_root, "otelwasm-rust-example-traces-processor");
     build_wasm_package(&workspace_root, "otelwasm-rust-example-traces-exporter");
     build_wasm_package(&workspace_root, "otelwasm-rust-example-traces-receiver");
+    let run_socket_e2e = env::var("OTELWASM_RUN_SOCKET_E2E")
+        .map(|value| value == "1")
+        .unwrap_or(false);
+    if run_socket_e2e {
+        build_wasm_package(
+            &workspace_root,
+            "otelwasm-rust-example-traces-socket-exporter",
+        );
+    }
 
     let processor_wasm_path = wasm_path(
         &workspace_root,
@@ -59,6 +69,10 @@ fn e2e_otelwasm_can_run_rust_guest() {
         &workspace_root,
         "otelwasm_rust_example_traces_receiver.wasm",
     );
+    let socket_exporter_wasm_path = wasm_path(
+        &workspace_root,
+        "otelwasm_rust_example_traces_socket_exporter.wasm",
+    );
     for path in [
         &processor_wasm_path,
         &exporter_wasm_path,
@@ -70,19 +84,32 @@ fn e2e_otelwasm_can_run_rust_guest() {
             path.display()
         );
     }
+    if run_socket_e2e {
+        assert!(
+            socket_exporter_wasm_path.exists(),
+            "expected guest wasm binary to exist at {}",
+            socket_exporter_wasm_path.display()
+        );
+    }
 
     let go_harness_dir = workspace_root.join("e2e").join("go_harness");
     let go_cache_dir = workspace_root.join("target").join("go-build-cache");
-    let test_status = Command::new("go")
+    let mut go_test = Command::new("go");
+    go_test
         .arg("test")
         .arg("./...")
         .env("OTELWASM_PROCESSOR_WASM_PATH", &processor_wasm_path)
         .env("OTELWASM_EXPORTER_WASM_PATH", &exporter_wasm_path)
         .env("OTELWASM_RECEIVER_WASM_PATH", &receiver_wasm_path)
         .env("GOCACHE", &go_cache_dir)
-        .current_dir(&go_harness_dir)
-        .status()
-        .expect("failed to execute go test");
+        .current_dir(&go_harness_dir);
+    if run_socket_e2e {
+        go_test.env("OTELWASM_RUN_SOCKET_E2E", "1").env(
+            "OTELWASM_SOCKET_EXPORTER_WASM_PATH",
+            &socket_exporter_wasm_path,
+        );
+    }
+    let test_status = go_test.status().expect("failed to execute go test");
     assert!(
         test_status.success(),
         "go e2e test failed with status: {test_status}"
