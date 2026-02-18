@@ -1,0 +1,3 @@
+/target
+**/*.wasm
+e2e/go_harness/go.test.mod
