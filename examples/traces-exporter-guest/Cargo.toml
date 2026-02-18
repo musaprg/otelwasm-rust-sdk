@@ -1,0 +1,16 @@
+[package]
+name = "otelwasm-rust-example-traces-exporter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+otelwasm-rust-sdk = { path = "../../crates/otelwasm-rust-sdk" }
+opentelemetry-proto = { version = "0.31.0", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
+serde.workspace = true
+serde_json.workspace = true

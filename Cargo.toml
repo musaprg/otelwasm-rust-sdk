@@ -2,6 +2,8 @@
 members = [
     "crates/otelwasm-rust-sdk",
     "examples/traces-processor-guest",
+    "examples/traces-exporter-guest",
+    "examples/traces-receiver-guest",
 ]
 resolver = "2"
 

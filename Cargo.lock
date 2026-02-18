@@ -242,7 +242,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "otelwasm-rust-example-traces-exporter"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry-proto",
+ "otelwasm-rust-sdk",
+ "prost",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "otelwasm-rust-example-traces-processor"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry-proto",
+ "otelwasm-rust-sdk",
+ "prost",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "otelwasm-rust-example-traces-receiver"
 version = "0.1.0"
 dependencies = [
  "opentelemetry-proto",

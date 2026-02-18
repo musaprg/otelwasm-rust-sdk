@@ -6,6 +6,8 @@ Rust SDK and sample guest WebAssembly module for the otelwasm ABI v1 shape.
 
 - `crates/otelwasm-rust-sdk`: SDK crate for otelwasm guest exports/imports.
 - `examples/traces-processor-guest`: Example traces processor guest module (`cdylib`) built to WASM.
+- `examples/traces-exporter-guest`: Example traces exporter guest module (non-network policy/export check).
+- `examples/traces-receiver-guest`: Example traces receiver guest module (synthetic traces emitter).
 - `e2e/go_harness`: End-to-end tests that load the Rust guest through `github.com/otelwasm/otelwasm/wasmplugin`.
 
 ## Build the guest WASM module
@@ -43,6 +45,35 @@ Required `plugin_config`:
 {
   "attribute_name": "processed.by",
   "attribute_value": "otelwasm-rust-sdk-example"
+}
+```
+
+## Example exporter behavior
+
+The traces exporter example validates that each span has a required string attribute/value and
+returns an error if not.
+
+Required `plugin_config`:
+
+```json
+{
+  "required_attribute_name": "export.allowed",
+  "required_attribute_value": "yes"
+}
+```
+
+## Example receiver behavior
+
+The traces receiver example emits one synthetic traces batch with a configured span name and
+attribute.
+
+Required `plugin_config`:
+
+```json
+{
+  "span_name": "receiver-generated-span",
+  "attribute_name": "receiver.source",
+  "attribute_value": "otelwasm-rust-sdk"
 }
 ```
 

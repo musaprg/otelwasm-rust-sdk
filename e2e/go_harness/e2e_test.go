@@ -11,9 +11,9 @@ import (
 )
 
 func TestRustGuestTracesProcessorE2E(t *testing.T) {
-	wasmPath := os.Getenv("OTELWASM_WASM_PATH")
+	wasmPath := os.Getenv("OTELWASM_PROCESSOR_WASM_PATH")
 	if wasmPath == "" {
-		t.Fatal("OTELWASM_WASM_PATH must be set")
+		t.Fatal("OTELWASM_PROCESSOR_WASM_PATH must be set")
 	}
 
 	cfg := &wasmplugin.Config{
@@ -75,9 +75,9 @@ func TestRustGuestTracesProcessorE2E(t *testing.T) {
 }
 
 func TestRustGuestStatusReasonPropagation(t *testing.T) {
-	wasmPath := os.Getenv("OTELWASM_WASM_PATH")
+	wasmPath := os.Getenv("OTELWASM_PROCESSOR_WASM_PATH")
 	if wasmPath == "" {
-		t.Fatal("OTELWASM_WASM_PATH must be set")
+		t.Fatal("OTELWASM_PROCESSOR_WASM_PATH must be set")
 	}
 
 	cfg := &wasmplugin.Config{
@@ -113,6 +113,121 @@ func TestRustGuestStatusReasonPropagation(t *testing.T) {
 	}
 	if !strings.Contains(stack.StatusReason, "attribute_name") {
 		t.Fatalf("expected start failure reason to include attribute_name")
+	}
+}
+
+func TestRustGuestTracesExporterE2E(t *testing.T) {
+	wasmPath := os.Getenv("OTELWASM_EXPORTER_WASM_PATH")
+	if wasmPath == "" {
+		t.Fatal("OTELWASM_EXPORTER_WASM_PATH must be set")
+	}
+
+	cfg := &wasmplugin.Config{
+		Path: wasmPath,
+		PluginConfig: wasmplugin.PluginConfig{
+			"required_attribute_name":  "export.allowed",
+			"required_attribute_value": "yes",
+		},
+	}
+	cfg.RuntimeConfig.Default()
+
+	ctx := context.Background()
+	plugin, err := wasmplugin.NewWasmPlugin(ctx, cfg, []string{
+		"otelwasm_start",
+		"otelwasm_shutdown",
+		"otelwasm_consume_traces",
+	})
+	if err != nil {
+		t.Fatalf("new wasm plugin: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = plugin.Shutdown(context.Background())
+	})
+
+	startRes, err := plugin.ProcessFunctionCall(ctx, "otelwasm_start", &wasmplugin.Stack{
+		PluginConfigJSON: plugin.PluginConfigJSON,
+	})
+	if err != nil {
+		t.Fatalf("otelwasm_start failed: %v", err)
+	}
+	if len(startRes) == 0 || startRes[0] != 0 {
+		t.Fatalf("otelwasm_start returned non-success status: %v", startRes)
+	}
+
+	okInput := newTraces("export-ok")
+	okSpan := okInput.ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0)
+	okSpan.Attributes().PutStr("export.allowed", "yes")
+	if _, err := plugin.ConsumeTraces(ctx, okInput); err != nil {
+		t.Fatalf("otelwasm_consume_traces unexpectedly failed: %v", err)
+	}
+
+	badInput := newTraces("export-bad")
+	if _, err := plugin.ConsumeTraces(ctx, badInput); err == nil {
+		t.Fatal("expected exporter to reject traces without required attribute")
+	}
+}
+
+func TestRustGuestTracesReceiverE2E(t *testing.T) {
+	wasmPath := os.Getenv("OTELWASM_RECEIVER_WASM_PATH")
+	if wasmPath == "" {
+		t.Fatal("OTELWASM_RECEIVER_WASM_PATH must be set")
+	}
+
+	cfg := &wasmplugin.Config{
+		Path: wasmPath,
+		PluginConfig: wasmplugin.PluginConfig{
+			"span_name":       "receiver-generated-span",
+			"attribute_name":  "receiver.source",
+			"attribute_value": "otelwasm-rust-sdk",
+		},
+	}
+	cfg.RuntimeConfig.Default()
+
+	ctx := context.Background()
+	plugin, err := wasmplugin.NewWasmPlugin(ctx, cfg, []string{
+		"otelwasm_start",
+		"otelwasm_shutdown",
+		"otelwasm_start_traces_receiver",
+	})
+	if err != nil {
+		t.Fatalf("new wasm plugin: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = plugin.Shutdown(context.Background())
+	})
+
+	startRes, err := plugin.ProcessFunctionCall(ctx, "otelwasm_start", &wasmplugin.Stack{
+		PluginConfigJSON: plugin.PluginConfigJSON,
+	})
+	if err != nil {
+		t.Fatalf("otelwasm_start failed: %v", err)
+	}
+	if len(startRes) == 0 || startRes[0] != 0 {
+		t.Fatalf("otelwasm_start returned non-success status: %v", startRes)
+	}
+
+	var got ptrace.Traces
+	var gotCalled bool
+	stack := &wasmplugin.Stack{
+		PluginConfigJSON: plugin.PluginConfigJSON,
+		OnResultTracesChange: func(td ptrace.Traces) {
+			gotCalled = true
+			got = td
+		},
+	}
+	if _, err := plugin.ProcessFunctionCall(ctx, "otelwasm_start_traces_receiver", stack); err != nil {
+		t.Fatalf("otelwasm_start_traces_receiver failed: %v", err)
+	}
+	if !gotCalled {
+		t.Fatal("receiver did not emit traces")
+	}
+	span := got.ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0)
+	if span.Name() != "receiver-generated-span" {
+		t.Fatalf("unexpected emitted span name: %s", span.Name())
+	}
+	attrVal, ok := span.Attributes().Get("receiver.source")
+	if !ok || attrVal.Str() != "otelwasm-rust-sdk" {
+		t.Fatalf("unexpected receiver.source attribute: ok=%v value=%s", ok, attrVal.Str())
 	}
 }
 

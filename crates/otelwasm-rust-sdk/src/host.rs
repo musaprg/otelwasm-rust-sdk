@@ -4,6 +4,7 @@ extern "C" {
     fn otelwasm_set_result_traces(data_ptr: i32, data_size: i32);
     fn otelwasm_get_plugin_config(buf_ptr: i32, buf_limit: i32) -> i32;
     fn otelwasm_set_status_reason(msg_ptr: i32, msg_size: i32);
+    fn otelwasm_get_shutdown_requested() -> i32;
 }
 
 #[cfg(all(target_arch = "wasm32", not(feature = "import-module-otelwasm")))]
@@ -12,6 +13,7 @@ extern "C" {
     fn otelwasm_set_result_traces(data_ptr: i32, data_size: i32);
     fn otelwasm_get_plugin_config(buf_ptr: i32, buf_limit: i32) -> i32;
     fn otelwasm_set_status_reason(msg_ptr: i32, msg_size: i32);
+    fn otelwasm_get_shutdown_requested() -> i32;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -60,6 +62,16 @@ pub fn get_plugin_config_json() -> Result<Vec<u8>, String> {
         }
         buf_limit = actual_size;
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn get_shutdown_requested() -> bool {
+    unsafe { otelwasm_get_shutdown_requested() != 0 }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn get_shutdown_requested() -> bool {
+    false
 }
 
 #[cfg(not(target_arch = "wasm32"))]

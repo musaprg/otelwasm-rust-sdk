@@ -43,37 +43,42 @@ fn e2e_otelwasm_can_run_rust_guest() {
         return;
     }
 
-    let build_status = Command::new("cargo")
-        .arg("build")
-        .arg("-p")
-        .arg("otelwasm-rust-example-traces-processor")
-        .arg("--target")
-        .arg("wasm32-wasip1")
-        .current_dir(&workspace_root)
-        .status()
-        .expect("failed to execute cargo build");
-    assert!(
-        build_status.success(),
-        "building wasm guest failed with status: {build_status}"
-    );
+    build_wasm_package(&workspace_root, "otelwasm-rust-example-traces-processor");
+    build_wasm_package(&workspace_root, "otelwasm-rust-example-traces-exporter");
+    build_wasm_package(&workspace_root, "otelwasm-rust-example-traces-receiver");
 
-    let wasm_path = workspace_root
-        .join("target")
-        .join("wasm32-wasip1")
-        .join("debug")
-        .join("otelwasm_rust_example_traces_processor.wasm");
-    assert!(
-        wasm_path.exists(),
-        "expected guest wasm binary to exist at {}",
-        wasm_path.display()
+    let processor_wasm_path = wasm_path(
+        &workspace_root,
+        "otelwasm_rust_example_traces_processor.wasm",
     );
+    let exporter_wasm_path = wasm_path(
+        &workspace_root,
+        "otelwasm_rust_example_traces_exporter.wasm",
+    );
+    let receiver_wasm_path = wasm_path(
+        &workspace_root,
+        "otelwasm_rust_example_traces_receiver.wasm",
+    );
+    for path in [
+        &processor_wasm_path,
+        &exporter_wasm_path,
+        &receiver_wasm_path,
+    ] {
+        assert!(
+            path.exists(),
+            "expected guest wasm binary to exist at {}",
+            path.display()
+        );
+    }
 
     let go_harness_dir = workspace_root.join("e2e").join("go_harness");
     let go_cache_dir = workspace_root.join("target").join("go-build-cache");
     let test_status = Command::new("go")
         .arg("test")
         .arg("./...")
-        .env("OTELWASM_WASM_PATH", &wasm_path)
+        .env("OTELWASM_PROCESSOR_WASM_PATH", &processor_wasm_path)
+        .env("OTELWASM_EXPORTER_WASM_PATH", &exporter_wasm_path)
+        .env("OTELWASM_RECEIVER_WASM_PATH", &receiver_wasm_path)
         .env("GOCACHE", &go_cache_dir)
         .current_dir(&go_harness_dir)
         .status()
@@ -82,6 +87,30 @@ fn e2e_otelwasm_can_run_rust_guest() {
         test_status.success(),
         "go e2e test failed with status: {test_status}"
     );
+}
+
+fn build_wasm_package(workspace_root: &Path, package: &str) {
+    let build_status = Command::new("cargo")
+        .arg("build")
+        .arg("-p")
+        .arg(package)
+        .arg("--target")
+        .arg("wasm32-wasip1")
+        .current_dir(workspace_root)
+        .status()
+        .expect("failed to execute cargo build");
+    assert!(
+        build_status.success(),
+        "building wasm guest package {package} failed with status: {build_status}"
+    );
+}
+
+fn wasm_path(workspace_root: &Path, filename: &str) -> PathBuf {
+    workspace_root
+        .join("target")
+        .join("wasm32-wasip1")
+        .join("debug")
+        .join(filename)
 }
 
 #[test]
