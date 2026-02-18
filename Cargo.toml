@@ -4,6 +4,7 @@ members = [
     "examples/traces-processor-guest",
     "examples/traces-exporter-guest",
     "examples/traces-receiver-guest",
+    "examples/traces-socket-exporter-guest",
 ]
 resolver = "2"
 

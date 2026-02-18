@@ -1,9 +1,11 @@
 mod host;
 mod memory;
 mod runtime;
+mod socket;
 mod status;
 
 pub use runtime::{TracesExporter, TracesProcessor, TracesReceiver};
+pub use socket::http_get_status;
 pub use status::{Status, StatusCode};
 
 pub const TELEMETRY_TYPE_METRICS: i32 = 0x01;
