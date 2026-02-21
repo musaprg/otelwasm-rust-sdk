@@ -1,7 +1,11 @@
+#[path = "../../common/http_client.rs"]
+mod http_client;
+
+use http_client::{HttpClient, HttpEndpoint};
 use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueValue;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, LogsData, ResourceLogs, ScopeLogs};
-use otelwasm_rust_sdk::{register_logs_receiver, Endpoint, HttpClient, LogsReceiver, Status};
+use otelwasm_rust_sdk::{register_logs_receiver, LogsReceiver, Status};
 use prost::Message;
 use serde::Deserialize;
 use serde_json::Value;
@@ -11,7 +15,7 @@ const DEFAULT_SOURCE: &str = "webhookeventreceiver-rust";
 struct WebhookEventReceiver {
     client: HttpClient,
     event_url: String,
-    event_endpoint: Option<Endpoint>,
+    event_endpoint: Option<HttpEndpoint>,
     source: String,
     max_events: usize,
     emitted_events: usize,
@@ -62,7 +66,7 @@ impl LogsReceiver for WebhookEventReceiver {
         }
 
         self.event_endpoint = Some(
-            Endpoint::parse(&parsed.event_url)
+            HttpEndpoint::parse(&parsed.event_url)
                 .map_err(|err| Status::error(format!("invalid event_url: {err}")))?,
         );
         self.event_url = parsed.event_url;

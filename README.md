@@ -48,20 +48,24 @@ when compiled for `wasm32` with `socket-extension` enabled.
 
 ## Rust socket API
 
-The SDK socket interface is centered on `HttpClient`, `Endpoint`, `Request`, and `Response`.
+The core SDK only exposes transport primitives (`SocketAddress` + `TcpStream`) and does not
+include HTTP semantics.
 
 ```rust
-use otelwasm_rust_sdk::{Endpoint, HttpClient, Request};
+use std::time::Duration;
 
-let endpoint = Endpoint::parse("http://127.0.0.1:4318/v1/traces")?;
-let client = HttpClient::new();
+use otelwasm_rust_sdk::{SocketAddress, TcpStream};
 
-let response = client.send(
-    Request::post(&endpoint, b"...otlp bytes...")
-        .with_content_type("application/x-protobuf"),
-)?;
-assert!(response.status() / 100 == 2);
+let address = SocketAddress::parse("127.0.0.1:4318")?;
+let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))?;
+
+stream.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")?;
+let mut response = Vec::new();
+stream.read_to_end(&mut response)?;
 ```
+
+The HTTP examples in this repository use a small adapter module at
+`examples/common/http_client.rs` built on top of this transport API.
 
 ## Example processor behavior
 

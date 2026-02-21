@@ -6,7 +6,7 @@ mod status;
 
 pub use runtime::{LogsReceiver, TelemetryExporter};
 pub use runtime::{TracesExporter, TracesProcessor, TracesReceiver};
-pub use socket::{Endpoint, HttpClient, Method, Request, Response, SocketError};
+pub use socket::{SocketAddress, SocketError, TcpStream};
 pub use status::{Status, StatusCode};
 
 pub const TELEMETRY_TYPE_METRICS: i32 = 0x01;

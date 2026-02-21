@@ -1,9 +1,13 @@
+#[path = "../../common/http_client.rs"]
+mod http_client;
+
+use http_client::{HttpClient, HttpEndpoint};
 use opentelemetry_proto::tonic::logs::v1::LogsData;
 use opentelemetry_proto::tonic::metrics::v1::MetricsData;
 use opentelemetry_proto::tonic::trace::v1::TracesData;
 use otelwasm_rust_sdk::{
-    register_telemetry_exporter, Endpoint, HttpClient, Status, TelemetryExporter,
-    TELEMETRY_TYPE_LOGS, TELEMETRY_TYPE_METRICS, TELEMETRY_TYPE_TRACES,
+    register_telemetry_exporter, Status, TelemetryExporter, TELEMETRY_TYPE_LOGS,
+    TELEMETRY_TYPE_METRICS, TELEMETRY_TYPE_TRACES,
 };
 use prost::Message;
 use serde::Deserialize;
@@ -11,9 +15,9 @@ use serde_json::Value;
 
 struct OtlpHttpExporter {
     client: HttpClient,
-    traces_endpoint: Option<Endpoint>,
-    metrics_endpoint: Option<Endpoint>,
-    logs_endpoint: Option<Endpoint>,
+    traces_endpoint: Option<HttpEndpoint>,
+    metrics_endpoint: Option<HttpEndpoint>,
+    logs_endpoint: Option<HttpEndpoint>,
     started: bool,
 }
 
@@ -125,7 +129,7 @@ fn ensure_started(started: bool) -> Result<(), Status> {
 
 fn send_otlp_payload(
     client: &HttpClient,
-    endpoint: &Endpoint,
+    endpoint: &HttpEndpoint,
     body: &[u8],
     signal: &str,
 ) -> Result<(), Status> {
@@ -146,7 +150,7 @@ fn resolve_signal_endpoint(
     signal_endpoint: Option<&str>,
     default_path: &str,
     signal: &str,
-) -> Result<Endpoint, Status> {
+) -> Result<HttpEndpoint, Status> {
     if let Some(explicit) = signal_endpoint {
         return normalize_http_endpoint(explicit, &format!("{signal}_endpoint"));
     }
@@ -178,9 +182,9 @@ fn normalize_http_url(value: &str, field_name: &str) -> Result<String, Status> {
     Ok(value.to_string())
 }
 
-fn normalize_http_endpoint(value: &str, field_name: &str) -> Result<Endpoint, Status> {
+fn normalize_http_endpoint(value: &str, field_name: &str) -> Result<HttpEndpoint, Status> {
     let normalized = normalize_http_url(value, field_name)?;
-    Endpoint::parse(&normalized)
+    HttpEndpoint::parse(&normalized)
         .map_err(|err| Status::error(format!("invalid {field_name} URL: {err}")))
 }
 

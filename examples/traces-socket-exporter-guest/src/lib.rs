@@ -1,12 +1,16 @@
+#[path = "../../common/http_client.rs"]
+mod http_client;
+
+use http_client::{HttpClient, HttpEndpoint};
 use opentelemetry_proto::tonic::trace::v1::TracesData;
-use otelwasm_rust_sdk::{register_traces_exporter, Endpoint, HttpClient, Status, TracesExporter};
+use otelwasm_rust_sdk::{register_traces_exporter, Status, TracesExporter};
 use prost::Message;
 use serde::Deserialize;
 use serde_json::Value;
 
 struct SocketHealthcheckExporter {
     client: HttpClient,
-    healthcheck_endpoint: Option<Endpoint>,
+    healthcheck_endpoint: Option<HttpEndpoint>,
     started: bool,
 }
 
@@ -37,7 +41,7 @@ impl TracesExporter for SocketHealthcheckExporter {
             return Err(Status::error("healthcheck_url must be a non-empty string"));
         }
         self.healthcheck_endpoint = Some(
-            Endpoint::parse(&parsed.healthcheck_url)
+            HttpEndpoint::parse(&parsed.healthcheck_url)
                 .map_err(|err| Status::error(format!("invalid healthcheck_url: {err}")))?,
         );
         self.started = true;
