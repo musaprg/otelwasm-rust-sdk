@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::fmt;
+
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 use std::io::{ErrorKind, Read, Write};
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
@@ -5,17 +8,68 @@ use std::time::Duration;
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 use wasmedge_wasi_socket::TcpStream;
 
+#[derive(Debug)]
+pub enum SocketError {
+    UnsupportedPlatform,
+    InvalidUrl(String),
+    InvalidPort(std::num::ParseIntError),
+    InvalidStatusCode(std::num::ParseIntError),
+    InvalidUtf8(std::str::Utf8Error),
+    MalformedHttpResponse(String),
+    Io {
+        context: &'static str,
+        source: std::io::Error,
+    },
+}
+
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
-pub fn http_get_status(url: &str) -> Result<u16, String> {
+impl SocketError {
+    fn io(context: &'static str, source: std::io::Error) -> Self {
+        Self::Io { context, source }
+    }
+}
+
+impl fmt::Display for SocketError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedPlatform => {
+                write!(f, "socket-extension is only available for wasm32 targets")
+            }
+            Self::InvalidUrl(reason) => write!(f, "invalid URL: {reason}"),
+            Self::InvalidPort(err) => write!(f, "invalid port in URL: {err}"),
+            Self::InvalidStatusCode(err) => write!(f, "invalid HTTP status code: {err}"),
+            Self::InvalidUtf8(err) => write!(f, "response header was not valid UTF-8: {err}"),
+            Self::MalformedHttpResponse(reason) => write!(f, "malformed HTTP response: {reason}"),
+            Self::Io { context, source } => write!(f, "{context}: {source}"),
+        }
+    }
+}
+
+impl Error for SocketError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidPort(err) => Some(err),
+            Self::InvalidStatusCode(err) => Some(err),
+            Self::InvalidUtf8(err) => Some(err),
+            Self::Io { source, .. } => Some(source),
+            Self::UnsupportedPlatform | Self::InvalidUrl(_) | Self::MalformedHttpResponse(_) => {
+                None
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
+pub fn http_get_status(url: &str) -> Result<u16, SocketError> {
     let (status, _) = http_get_body(url)?;
     Ok(status)
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
-pub fn http_get_body(url: &str) -> Result<(u16, Vec<u8>), String> {
+pub fn http_get_body(url: &str) -> Result<(u16, Vec<u8>), SocketError> {
     let (host, port, path) = parse_http_url(url)?;
     let mut stream = TcpStream::connect((host.as_str(), port))
-        .map_err(|err| format!("failed to connect to {host}:{port}: {err}"))?;
+        .map_err(|err| SocketError::io("failed to connect", err))?;
     configure_timeouts(&mut stream, Duration::from_secs(10))?;
 
     let request = format!(
@@ -23,20 +77,20 @@ pub fn http_get_body(url: &str) -> Result<(u16, Vec<u8>), String> {
     );
     stream
         .write_all(request.as_bytes())
-        .map_err(|err| format!("failed to write request: {err}"))?;
+        .map_err(|err| SocketError::io("failed to write request", err))?;
 
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
-        .map_err(|err| format!("failed to read response: {err}"))?;
+        .map_err(|err| SocketError::io("failed to read response", err))?;
     parse_http_response(&response)
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
-pub fn http_post_status(url: &str, body: &[u8], content_type: &str) -> Result<u16, String> {
+pub fn http_post_status(url: &str, body: &[u8], content_type: &str) -> Result<u16, SocketError> {
     let (host, port, path) = parse_http_url(url)?;
     let mut stream = TcpStream::connect((host.as_str(), port))
-        .map_err(|err| format!("failed to connect to {host}:{port}: {err}"))?;
+        .map_err(|err| SocketError::io("failed to connect", err))?;
     configure_timeouts(&mut stream, Duration::from_secs(10))?;
 
     let request = format!(
@@ -45,56 +99,54 @@ pub fn http_post_status(url: &str, body: &[u8], content_type: &str) -> Result<u1
     );
     stream
         .write_all(request.as_bytes())
-        .map_err(|err| format!("failed to write request header: {err}"))?;
+        .map_err(|err| SocketError::io("failed to write request header", err))?;
     stream
         .write_all(body)
-        .map_err(|err| format!("failed to write request body: {err}"))?;
+        .map_err(|err| SocketError::io("failed to write request body", err))?;
 
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
-        .map_err(|err| format!("failed to read response: {err}"))?;
+        .map_err(|err| SocketError::io("failed to read response", err))?;
     let (status, _) = parse_http_response(&response)?;
     Ok(status)
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
-fn configure_timeouts(stream: &mut TcpStream, timeout: Duration) -> Result<(), String> {
+fn configure_timeouts(stream: &mut TcpStream, timeout: Duration) -> Result<(), SocketError> {
     if let Err(err) = stream.as_mut().set_send_timeout(Some(timeout)) {
         if err.kind() != ErrorKind::Unsupported {
-            return Err(format!("failed to set send timeout: {err}"));
+            return Err(SocketError::io("failed to set send timeout", err));
         }
     }
     if let Err(err) = stream.as_mut().set_recv_timeout(Some(timeout)) {
         if err.kind() != ErrorKind::Unsupported {
-            return Err(format!("failed to set recv timeout: {err}"));
+            return Err(SocketError::io("failed to set recv timeout", err));
         }
     }
     Ok(())
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
-fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
+fn parse_http_url(url: &str) -> Result<(String, u16, String), SocketError> {
     let rest = url
         .strip_prefix("http://")
-        .ok_or_else(|| "only http:// URLs are supported".to_string())?;
+        .ok_or_else(|| SocketError::InvalidUrl("only http:// URLs are supported".to_string()))?;
 
     let (host_port, path) = match rest.split_once('/') {
         Some((host_port, path_rest)) => (host_port, format!("/{}", path_rest)),
         None => (rest, "/".to_string()),
     };
     if host_port.is_empty() {
-        return Err("URL host is required".to_string());
+        return Err(SocketError::InvalidUrl("URL host is required".to_string()));
     }
 
     let (host, port) = match host_port.split_once(':') {
         Some((host, port_str)) => {
             if host.is_empty() {
-                return Err("URL host is required".to_string());
+                return Err(SocketError::InvalidUrl("URL host is required".to_string()));
             }
-            let port = port_str
-                .parse::<u16>()
-                .map_err(|err| format!("invalid port in URL: {err}"))?;
+            let port = port_str.parse::<u16>().map_err(SocketError::InvalidPort)?;
             (host.to_string(), port)
         }
         None => (host_port.to_string(), 80),
@@ -103,46 +155,68 @@ fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
-fn parse_http_response(response: &[u8]) -> Result<(u16, Vec<u8>), String> {
+fn parse_http_response(response: &[u8]) -> Result<(u16, Vec<u8>), SocketError> {
     let header_end = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| "malformed HTTP response (missing header terminator)".to_string())?;
-    let header = std::str::from_utf8(&response[..header_end])
-        .map_err(|err| format!("response header was not valid UTF-8: {err}"))?;
+        .ok_or_else(|| {
+            SocketError::MalformedHttpResponse("missing header terminator".to_string())
+        })?;
+    let header = std::str::from_utf8(&response[..header_end]).map_err(SocketError::InvalidUtf8)?;
     let status = parse_status_code(header)?;
     let body = response[(header_end + 4)..].to_vec();
     Ok((status, body))
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
-fn parse_status_code(response: &str) -> Result<u16, String> {
+fn parse_status_code(response: &str) -> Result<u16, SocketError> {
     let first_line = response
         .lines()
         .next()
-        .ok_or_else(|| "empty HTTP response".to_string())?;
+        .ok_or_else(|| SocketError::MalformedHttpResponse("empty HTTP response".to_string()))?;
     let mut parts = first_line.split_whitespace();
-    let _http_version = parts
-        .next()
-        .ok_or_else(|| "malformed HTTP status line".to_string())?;
-    let code = parts
-        .next()
-        .ok_or_else(|| "missing HTTP status code".to_string())?;
-    code.parse::<u16>()
-        .map_err(|err| format!("invalid HTTP status code: {err}"))
+    let _http_version = parts.next().ok_or_else(|| {
+        SocketError::MalformedHttpResponse("malformed HTTP status line".to_string())
+    })?;
+    let code = parts.next().ok_or_else(|| {
+        SocketError::MalformedHttpResponse("missing HTTP status code".to_string())
+    })?;
+    code.parse::<u16>().map_err(SocketError::InvalidStatusCode)
 }
 
 #[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
-pub fn http_get_status(_url: &str) -> Result<u16, String> {
-    Err("socket-extension is only available for wasm32 targets".to_string())
+pub fn http_get_status(_url: &str) -> Result<u16, SocketError> {
+    Err(SocketError::UnsupportedPlatform)
 }
 
 #[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
-pub fn http_get_body(_url: &str) -> Result<(u16, Vec<u8>), String> {
-    Err("socket-extension is only available for wasm32 targets".to_string())
+pub fn http_get_body(_url: &str) -> Result<(u16, Vec<u8>), SocketError> {
+    Err(SocketError::UnsupportedPlatform)
 }
 
 #[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
-pub fn http_post_status(_url: &str, _body: &[u8], _content_type: &str) -> Result<u16, String> {
-    Err("socket-extension is only available for wasm32 targets".to_string())
+pub fn http_post_status(_url: &str, _body: &[u8], _content_type: &str) -> Result<u16, SocketError> {
+    Err(SocketError::UnsupportedPlatform)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
+    #[test]
+    fn socket_functions_report_unsupported_platform() {
+        assert!(matches!(
+            http_get_status("http://example.com"),
+            Err(SocketError::UnsupportedPlatform)
+        ));
+        assert!(matches!(
+            http_get_body("http://example.com"),
+            Err(SocketError::UnsupportedPlatform)
+        ));
+        assert!(matches!(
+            http_post_status("http://example.com", b"{}", "application/json"),
+            Err(SocketError::UnsupportedPlatform)
+        ));
+    }
 }

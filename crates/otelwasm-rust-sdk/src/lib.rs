@@ -9,6 +9,7 @@ pub use runtime::{TracesExporter, TracesProcessor, TracesReceiver};
 pub use socket::http_get_body;
 pub use socket::http_get_status;
 pub use socket::http_post_status;
+pub use socket::SocketError;
 pub use status::{Status, StatusCode};
 
 pub const TELEMETRY_TYPE_METRICS: i32 = 0x01;
