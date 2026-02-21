@@ -1,13 +1,23 @@
 use opentelemetry_proto::tonic::trace::v1::TracesData;
-use otelwasm_rust_sdk::{http_get_status, register_traces_exporter, Status, TracesExporter};
+use otelwasm_rust_sdk::{register_traces_exporter, Endpoint, HttpClient, Status, TracesExporter};
 use prost::Message;
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Default)]
 struct SocketHealthcheckExporter {
-    healthcheck_url: String,
+    client: HttpClient,
+    healthcheck_endpoint: Option<Endpoint>,
     started: bool,
+}
+
+impl Default for SocketHealthcheckExporter {
+    fn default() -> Self {
+        Self {
+            client: HttpClient::new(),
+            healthcheck_endpoint: None,
+            started: false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -26,7 +36,10 @@ impl TracesExporter for SocketHealthcheckExporter {
         if parsed.healthcheck_url.is_empty() {
             return Err(Status::error("healthcheck_url must be a non-empty string"));
         }
-        self.healthcheck_url = parsed.healthcheck_url;
+        self.healthcheck_endpoint = Some(
+            Endpoint::parse(&parsed.healthcheck_url)
+                .map_err(|err| Status::error(format!("invalid healthcheck_url: {err}")))?,
+        );
         self.started = true;
         Ok(())
     }
@@ -41,8 +54,14 @@ impl TracesExporter for SocketHealthcheckExporter {
         TracesData::decode(data)
             .map_err(|err| Status::error(format!("failed to decode traces payload: {err}")))?;
 
-        let status = http_get_status(&self.healthcheck_url)
+        let endpoint = self.healthcheck_endpoint.as_ref().ok_or_else(|| {
+            Status::error("healthcheck endpoint is not configured; start must succeed first")
+        })?;
+        let response = self
+            .client
+            .get(endpoint)
             .map_err(|err| Status::error(format!("healthcheck request failed: {err}")))?;
+        let status = response.status();
         if status / 100 != 2 {
             return Err(Status::error(format!(
                 "healthcheck endpoint returned non-2xx status: {status}"
@@ -53,6 +72,7 @@ impl TracesExporter for SocketHealthcheckExporter {
 
     fn shutdown(&mut self) -> Result<(), Status> {
         self.started = false;
+        self.healthcheck_endpoint = None;
         Ok(())
     }
 }

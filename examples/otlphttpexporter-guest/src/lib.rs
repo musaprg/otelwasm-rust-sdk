@@ -2,19 +2,31 @@ use opentelemetry_proto::tonic::logs::v1::LogsData;
 use opentelemetry_proto::tonic::metrics::v1::MetricsData;
 use opentelemetry_proto::tonic::trace::v1::TracesData;
 use otelwasm_rust_sdk::{
-    http_post_status, register_telemetry_exporter, Status, TelemetryExporter, TELEMETRY_TYPE_LOGS,
-    TELEMETRY_TYPE_METRICS, TELEMETRY_TYPE_TRACES,
+    register_telemetry_exporter, Endpoint, HttpClient, Status, TelemetryExporter,
+    TELEMETRY_TYPE_LOGS, TELEMETRY_TYPE_METRICS, TELEMETRY_TYPE_TRACES,
 };
 use prost::Message;
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Default)]
 struct OtlpHttpExporter {
-    traces_endpoint: String,
-    metrics_endpoint: String,
-    logs_endpoint: String,
+    client: HttpClient,
+    traces_endpoint: Option<Endpoint>,
+    metrics_endpoint: Option<Endpoint>,
+    logs_endpoint: Option<Endpoint>,
     started: bool,
+}
+
+impl Default for OtlpHttpExporter {
+    fn default() -> Self {
+        Self {
+            client: HttpClient::new(),
+            traces_endpoint: None,
+            metrics_endpoint: None,
+            logs_endpoint: None,
+            started: false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,24 +49,24 @@ impl TelemetryExporter for OtlpHttpExporter {
         let parsed: ExporterConfig = serde_json::from_value(config)
             .map_err(|err| Status::error(format!("invalid plugin config JSON: {err}")))?;
 
-        self.traces_endpoint = resolve_signal_endpoint(
+        self.traces_endpoint = Some(resolve_signal_endpoint(
             parsed.endpoint.as_deref(),
             parsed.traces_endpoint.as_deref(),
             "/v1/traces",
             "traces",
-        )?;
-        self.metrics_endpoint = resolve_signal_endpoint(
+        )?);
+        self.metrics_endpoint = Some(resolve_signal_endpoint(
             parsed.endpoint.as_deref(),
             parsed.metrics_endpoint.as_deref(),
             "/v1/metrics",
             "metrics",
-        )?;
-        self.logs_endpoint = resolve_signal_endpoint(
+        )?);
+        self.logs_endpoint = Some(resolve_signal_endpoint(
             parsed.endpoint.as_deref(),
             parsed.logs_endpoint.as_deref(),
             "/v1/logs",
             "logs",
-        )?;
+        )?);
 
         self.started = true;
         Ok(())
@@ -64,25 +76,40 @@ impl TelemetryExporter for OtlpHttpExporter {
         ensure_started(self.started)?;
         TracesData::decode(data)
             .map_err(|err| Status::error(format!("failed to decode traces payload: {err}")))?;
-        send_otlp_payload(&self.traces_endpoint, data, "traces")
+        let endpoint = self
+            .traces_endpoint
+            .as_ref()
+            .ok_or_else(|| Status::error("traces endpoint is not configured"))?;
+        send_otlp_payload(&self.client, endpoint, data, "traces")
     }
 
     fn export_metrics(&mut self, data: &[u8]) -> Result<(), Status> {
         ensure_started(self.started)?;
         MetricsData::decode(data)
             .map_err(|err| Status::error(format!("failed to decode metrics payload: {err}")))?;
-        send_otlp_payload(&self.metrics_endpoint, data, "metrics")
+        let endpoint = self
+            .metrics_endpoint
+            .as_ref()
+            .ok_or_else(|| Status::error("metrics endpoint is not configured"))?;
+        send_otlp_payload(&self.client, endpoint, data, "metrics")
     }
 
     fn export_logs(&mut self, data: &[u8]) -> Result<(), Status> {
         ensure_started(self.started)?;
         LogsData::decode(data)
             .map_err(|err| Status::error(format!("failed to decode logs payload: {err}")))?;
-        send_otlp_payload(&self.logs_endpoint, data, "logs")
+        let endpoint = self
+            .logs_endpoint
+            .as_ref()
+            .ok_or_else(|| Status::error("logs endpoint is not configured"))?;
+        send_otlp_payload(&self.client, endpoint, data, "logs")
     }
 
     fn shutdown(&mut self) -> Result<(), Status> {
         self.started = false;
+        self.traces_endpoint = None;
+        self.metrics_endpoint = None;
+        self.logs_endpoint = None;
         Ok(())
     }
 }
@@ -96,9 +123,16 @@ fn ensure_started(started: bool) -> Result<(), Status> {
     ))
 }
 
-fn send_otlp_payload(endpoint: &str, body: &[u8], signal: &str) -> Result<(), Status> {
-    let status = http_post_status(endpoint, body, "application/x-protobuf")
+fn send_otlp_payload(
+    client: &HttpClient,
+    endpoint: &Endpoint,
+    body: &[u8],
+    signal: &str,
+) -> Result<(), Status> {
+    let response = client
+        .post(endpoint, body, "application/x-protobuf")
         .map_err(|err| Status::error(format!("failed to export {signal} over HTTP: {err}")))?;
+    let status = response.status();
     if status / 100 != 2 {
         return Err(Status::error(format!(
             "OTLP HTTP endpoint returned non-2xx for {signal}: {status}"
@@ -112,9 +146,9 @@ fn resolve_signal_endpoint(
     signal_endpoint: Option<&str>,
     default_path: &str,
     signal: &str,
-) -> Result<String, Status> {
+) -> Result<Endpoint, Status> {
     if let Some(explicit) = signal_endpoint {
-        return normalize_http_url(explicit, &format!("{signal}_endpoint"));
+        return normalize_http_endpoint(explicit, &format!("{signal}_endpoint"));
     }
 
     let base = endpoint.ok_or_else(|| {
@@ -123,11 +157,10 @@ fn resolve_signal_endpoint(
         ))
     })?;
     let normalized = normalize_http_url(base, "endpoint")?;
-    Ok(format!(
-        "{}{}",
-        normalized.trim_end_matches('/'),
-        default_path
-    ))
+    normalize_http_endpoint(
+        &format!("{}{}", normalized.trim_end_matches('/'), default_path),
+        "endpoint",
+    )
 }
 
 fn normalize_http_url(value: &str, field_name: &str) -> Result<String, Status> {
@@ -143,6 +176,12 @@ fn normalize_http_url(value: &str, field_name: &str) -> Result<String, Status> {
         )));
     }
     Ok(value.to_string())
+}
+
+fn normalize_http_endpoint(value: &str, field_name: &str) -> Result<Endpoint, Status> {
+    let normalized = normalize_http_url(value, field_name)?;
+    Endpoint::parse(&normalized)
+        .map_err(|err| Status::error(format!("invalid {field_name} URL: {err}")))
 }
 
 register_telemetry_exporter!(

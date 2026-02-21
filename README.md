@@ -46,6 +46,23 @@ OTELWASM_RUN_SOCKET_E2E=1 cargo test -p otelwasm-rust-sdk --tests
 The socket exporter path uses [`wasmedge_wasi_socket`](https://github.com/second-state/wasmedge_wasi_socket)
 when compiled for `wasm32` with `socket-extension` enabled.
 
+## Rust socket API
+
+The SDK socket interface is centered on `HttpClient`, `Endpoint`, `Request`, and `Response`.
+
+```rust
+use otelwasm_rust_sdk::{Endpoint, HttpClient, Request};
+
+let endpoint = Endpoint::parse("http://127.0.0.1:4318/v1/traces")?;
+let client = HttpClient::new();
+
+let response = client.send(
+    Request::post(&endpoint, b"...otlp bytes...")
+        .with_content_type("application/x-protobuf"),
+)?;
+assert!(response.status() / 100 == 2);
+```
+
 ## Example processor behavior
 
 The traces processor example mutates incoming spans by adding/updating one attribute on every

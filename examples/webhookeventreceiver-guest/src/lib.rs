@@ -1,20 +1,35 @@
 use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValueValue;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, LogsData, ResourceLogs, ScopeLogs};
-use otelwasm_rust_sdk::{http_get_body, register_logs_receiver, LogsReceiver, Status};
+use otelwasm_rust_sdk::{register_logs_receiver, Endpoint, HttpClient, LogsReceiver, Status};
 use prost::Message;
 use serde::Deserialize;
 use serde_json::Value;
 
 const DEFAULT_SOURCE: &str = "webhookeventreceiver-rust";
 
-#[derive(Default)]
 struct WebhookEventReceiver {
+    client: HttpClient,
     event_url: String,
+    event_endpoint: Option<Endpoint>,
     source: String,
     max_events: usize,
     emitted_events: usize,
     started: bool,
+}
+
+impl Default for WebhookEventReceiver {
+    fn default() -> Self {
+        Self {
+            client: HttpClient::new(),
+            event_url: String::new(),
+            event_endpoint: None,
+            source: default_source(),
+            max_events: default_max_events(),
+            emitted_events: 0,
+            started: false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,18 +57,14 @@ impl LogsReceiver for WebhookEventReceiver {
 
         let parsed: ReceiverConfig = serde_json::from_value(config)
             .map_err(|err| Status::error(format!("invalid plugin config JSON: {err}")))?;
-        if parsed.event_url.trim().is_empty() {
-            return Err(Status::error("event_url must be a non-empty string"));
-        }
-        if !parsed.event_url.starts_with("http://") {
-            return Err(Status::error(
-                "event_url must start with http:// (TLS/https is not supported in this example)",
-            ));
-        }
         if parsed.max_events == 0 {
             return Err(Status::error("max_events must be greater than 0"));
         }
 
+        self.event_endpoint = Some(
+            Endpoint::parse(&parsed.event_url)
+                .map_err(|err| Status::error(format!("invalid event_url: {err}")))?,
+        );
         self.event_url = parsed.event_url;
         self.source = parsed.source;
         self.max_events = parsed.max_events;
@@ -72,8 +83,15 @@ impl LogsReceiver for WebhookEventReceiver {
             return Ok(None);
         }
 
-        let (status, body) = http_get_body(&self.event_url)
+        let endpoint = self
+            .event_endpoint
+            .as_ref()
+            .ok_or_else(|| Status::error("event endpoint is not configured"))?;
+        let response = self
+            .client
+            .get(endpoint)
             .map_err(|err| Status::error(format!("failed to receive webhook event: {err}")))?;
+        let status = response.status();
         if status / 100 != 2 {
             return Err(Status::error(format!(
                 "event source returned non-2xx status: {status}"
@@ -82,13 +100,14 @@ impl LogsReceiver for WebhookEventReceiver {
 
         self.emitted_events += 1;
         Ok(Some(
-            build_logs(&self.event_url, &self.source, &body).encode_to_vec(),
+            build_logs(&self.event_url, &self.source, response.body()).encode_to_vec(),
         ))
     }
 
     fn shutdown(&mut self) -> Result<(), Status> {
         self.started = false;
         self.emitted_events = 0;
+        self.event_endpoint = None;
         Ok(())
     }
 }
