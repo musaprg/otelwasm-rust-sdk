@@ -10,9 +10,12 @@ path = "src/lib.rs"
 [features]
 default = []
 import-module-otelwasm = []
-socket-extension = []
+socket-extension = ["dep:wasmedge_wasi_socket"]
 
 [dependencies]
 once_cell.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasmedge_wasi_socket = { version = "0.5.5", optional = true }

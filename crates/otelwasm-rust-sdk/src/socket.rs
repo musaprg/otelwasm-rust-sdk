@@ -1,21 +1,16 @@
-#[cfg(feature = "socket-extension")]
-use std::io::{Read, Write};
-#[cfg(feature = "socket-extension")]
-use std::net::TcpStream;
-#[cfg(feature = "socket-extension")]
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
+use std::io::{ErrorKind, Read, Write};
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 use std::time::Duration;
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
+use wasmedge_wasi_socket::TcpStream;
 
-#[cfg(feature = "socket-extension")]
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 pub fn http_get_status(url: &str) -> Result<u16, String> {
     let (host, port, path) = parse_http_url(url)?;
     let mut stream = TcpStream::connect((host.as_str(), port))
         .map_err(|err| format!("failed to connect to {host}:{port}: {err}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .map_err(|err| format!("failed to set read timeout: {err}"))?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(10)))
-        .map_err(|err| format!("failed to set write timeout: {err}"))?;
+    configure_timeouts(&mut stream, Duration::from_secs(10))?;
 
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: otelwasm-rust-sdk\r\n\r\n"
@@ -33,12 +28,22 @@ pub fn http_get_status(url: &str) -> Result<u16, String> {
     parse_status_code(&text)
 }
 
-#[cfg(not(feature = "socket-extension"))]
-pub fn http_get_status(_url: &str) -> Result<u16, String> {
-    Err("socket-extension feature is disabled".to_string())
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
+fn configure_timeouts(stream: &mut TcpStream, timeout: Duration) -> Result<(), String> {
+    if let Err(err) = stream.as_mut().set_send_timeout(Some(timeout)) {
+        if err.kind() != ErrorKind::Unsupported {
+            return Err(format!("failed to set send timeout: {err}"));
+        }
+    }
+    if let Err(err) = stream.as_mut().set_recv_timeout(Some(timeout)) {
+        if err.kind() != ErrorKind::Unsupported {
+            return Err(format!("failed to set recv timeout: {err}"));
+        }
+    }
+    Ok(())
 }
 
-#[cfg(feature = "socket-extension")]
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
     let rest = url
         .strip_prefix("http://")
@@ -67,7 +72,7 @@ fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
     Ok((host, port, path))
 }
 
-#[cfg(feature = "socket-extension")]
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 fn parse_status_code(response: &str) -> Result<u16, String> {
     let first_line = response
         .lines()
@@ -82,4 +87,9 @@ fn parse_status_code(response: &str) -> Result<u16, String> {
         .ok_or_else(|| "missing HTTP status code".to_string())?;
     code.parse::<u16>()
         .map_err(|err| format!("invalid HTTP status code: {err}"))
+}
+
+#[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
+pub fn http_get_status(_url: &str) -> Result<u16, String> {
+    Err("socket-extension is only available for wasm32 targets".to_string())
 }

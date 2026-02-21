@@ -41,6 +41,9 @@ Socket E2E tests are gated and disabled by default. Enable them with:
 OTELWASM_RUN_SOCKET_E2E=1 cargo test -p otelwasm-rust-sdk --tests
 ```
 
+The socket exporter path uses [`wasmedge_wasi_socket`](https://github.com/second-state/wasmedge_wasi_socket)
+when compiled for `wasm32` with `socket-extension` enabled.
+
 ## Example processor behavior
 
 The traces processor example mutates incoming spans by adding/updating one attribute on every
