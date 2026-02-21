@@ -9,6 +9,8 @@ Rust SDK and sample guest WebAssembly module for the otelwasm ABI v1 shape.
 - `examples/traces-exporter-guest`: Example traces exporter guest module (non-network policy/export check).
 - `examples/traces-receiver-guest`: Example traces receiver guest module (synthetic traces emitter).
 - `examples/traces-socket-exporter-guest`: Optional socket-based exporter example for environments where the WASI socket extension is available.
+- `examples/otlphttpexporter-guest`: OTLP/HTTP exporter example (traces/metrics/logs) using socket extension networking.
+- `examples/webhookeventreceiver-guest`: Webhook-style logs receiver example that fetches events from a configured HTTP endpoint and emits logs.
 - `e2e/go_harness`: End-to-end tests that load the Rust guest through `github.com/otelwasm/otelwasm/wasmplugin`.
 
 ## Build the guest WASM module
@@ -72,6 +74,29 @@ Required `plugin_config`:
 }
 ```
 
+## Example OTLP/HTTP exporter behavior
+
+The OTLP/HTTP exporter example accepts OTLP protobuf payloads for traces/metrics/logs and forwards
+them to HTTP endpoints via POST (`application/x-protobuf`).
+
+Required `plugin_config`:
+
+```json
+{
+  "endpoint": "http://127.0.0.1:4318"
+}
+```
+
+Optional per-signal overrides:
+
+```json
+{
+  "traces_endpoint": "http://127.0.0.1:4318/v1/traces",
+  "metrics_endpoint": "http://127.0.0.1:4318/v1/metrics",
+  "logs_endpoint": "http://127.0.0.1:4318/v1/logs"
+}
+```
+
 ## Example receiver behavior
 
 The traces receiver example emits one synthetic traces batch with a configured span name and
@@ -84,6 +109,32 @@ Required `plugin_config`:
   "span_name": "receiver-generated-span",
   "attribute_name": "receiver.source",
   "attribute_value": "otelwasm-rust-sdk"
+}
+```
+
+## Example webhook event receiver behavior
+
+The webhook event receiver example fetches one JSON event from `event_url` per receiver cycle and
+emits it as OTLP logs data.
+
+Note: this example intentionally uses outbound HTTP fetch instead of opening a listener socket.
+With the current otelwasm WasmEdge v2 host wiring, listener/`sock_accept` compatibility is not yet
+available via the Rust `wasmedge_wasi_socket` path.
+
+Required `plugin_config`:
+
+```json
+{
+  "event_url": "http://127.0.0.1:8080/webhook"
+}
+```
+
+Optional fields:
+
+```json
+{
+  "source": "webhookeventreceiver-rust",
+  "max_events": 1
 }
 ```
 

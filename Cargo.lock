@@ -269,6 +269,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "otelwasm-rust-example-otlphttpexporter"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry-proto",
+ "otelwasm-rust-sdk",
+ "prost",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "otelwasm-rust-example-traces-exporter"
 version = "0.1.0"
 dependencies = [
@@ -303,6 +314,17 @@ dependencies = [
 
 [[package]]
 name = "otelwasm-rust-example-traces-socket-exporter"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry-proto",
+ "otelwasm-rust-sdk",
+ "prost",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "otelwasm-rust-example-webhookeventreceiver"
 version = "0.1.0"
 dependencies = [
  "opentelemetry-proto",

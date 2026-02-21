@@ -5,6 +5,8 @@ members = [
     "examples/traces-exporter-guest",
     "examples/traces-receiver-guest",
     "examples/traces-socket-exporter-guest",
+    "examples/otlphttpexporter-guest",
+    "examples/webhookeventreceiver-guest",
 ]
 resolver = "2"
 

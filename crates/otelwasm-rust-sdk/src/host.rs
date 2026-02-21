@@ -2,6 +2,9 @@
 #[link(wasm_import_module = "otelwasm")]
 extern "C" {
     fn otelwasm_set_result_traces(data_ptr: i32, data_size: i32);
+    #[allow(dead_code)]
+    fn otelwasm_set_result_metrics(data_ptr: i32, data_size: i32);
+    fn otelwasm_set_result_logs(data_ptr: i32, data_size: i32);
     fn otelwasm_get_plugin_config(buf_ptr: i32, buf_limit: i32) -> i32;
     fn otelwasm_set_status_reason(msg_ptr: i32, msg_size: i32);
     fn otelwasm_get_shutdown_requested() -> i32;
@@ -11,6 +14,9 @@ extern "C" {
 #[link(wasm_import_module = "opentelemetry.io/wasm")]
 extern "C" {
     fn otelwasm_set_result_traces(data_ptr: i32, data_size: i32);
+    #[allow(dead_code)]
+    fn otelwasm_set_result_metrics(data_ptr: i32, data_size: i32);
+    fn otelwasm_set_result_logs(data_ptr: i32, data_size: i32);
     fn otelwasm_get_plugin_config(buf_ptr: i32, buf_limit: i32) -> i32;
     fn otelwasm_set_status_reason(msg_ptr: i32, msg_size: i32);
     fn otelwasm_get_shutdown_requested() -> i32;
@@ -21,6 +27,32 @@ pub fn set_result_traces(data: &[u8]) {
     unsafe {
         otelwasm_set_result_traces(data.as_ptr() as i32, data.len() as i32);
     }
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "wasm32")]
+pub fn set_result_metrics(data: &[u8]) {
+    unsafe {
+        otelwasm_set_result_metrics(data.as_ptr() as i32, data.len() as i32);
+    }
+}
+
+#[allow(dead_code)]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_result_metrics(_data: &[u8]) {
+    // No-op in non-wasm unit tests.
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn set_result_logs(data: &[u8]) {
+    unsafe {
+        otelwasm_set_result_logs(data.as_ptr() as i32, data.len() as i32);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_result_logs(_data: &[u8]) {
+    // No-op in non-wasm unit tests.
 }
 
 #[cfg(not(target_arch = "wasm32"))]

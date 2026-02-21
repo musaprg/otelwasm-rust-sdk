@@ -7,6 +7,12 @@ use wasmedge_wasi_socket::TcpStream;
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 pub fn http_get_status(url: &str) -> Result<u16, String> {
+    let (status, _) = http_get_body(url)?;
+    Ok(status)
+}
+
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
+pub fn http_get_body(url: &str) -> Result<(u16, Vec<u8>), String> {
     let (host, port, path) = parse_http_url(url)?;
     let mut stream = TcpStream::connect((host.as_str(), port))
         .map_err(|err| format!("failed to connect to {host}:{port}: {err}"))?;
@@ -23,9 +29,33 @@ pub fn http_get_status(url: &str) -> Result<u16, String> {
     stream
         .read_to_end(&mut response)
         .map_err(|err| format!("failed to read response: {err}"))?;
-    let text = String::from_utf8(response)
-        .map_err(|err| format!("response was not valid UTF-8: {err}"))?;
-    parse_status_code(&text)
+    parse_http_response(&response)
+}
+
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
+pub fn http_post_status(url: &str, body: &[u8], content_type: &str) -> Result<u16, String> {
+    let (host, port, path) = parse_http_url(url)?;
+    let mut stream = TcpStream::connect((host.as_str(), port))
+        .map_err(|err| format!("failed to connect to {host}:{port}: {err}"))?;
+    configure_timeouts(&mut stream, Duration::from_secs(10))?;
+
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: otelwasm-rust-sdk\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("failed to write request header: {err}"))?;
+    stream
+        .write_all(body)
+        .map_err(|err| format!("failed to write request body: {err}"))?;
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|err| format!("failed to read response: {err}"))?;
+    let (status, _) = parse_http_response(&response)?;
+    Ok(status)
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
@@ -73,6 +103,19 @@ fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
 }
 
 #[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
+fn parse_http_response(response: &[u8]) -> Result<(u16, Vec<u8>), String> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "malformed HTTP response (missing header terminator)".to_string())?;
+    let header = std::str::from_utf8(&response[..header_end])
+        .map_err(|err| format!("response header was not valid UTF-8: {err}"))?;
+    let status = parse_status_code(header)?;
+    let body = response[(header_end + 4)..].to_vec();
+    Ok((status, body))
+}
+
+#[cfg(all(feature = "socket-extension", target_arch = "wasm32"))]
 fn parse_status_code(response: &str) -> Result<u16, String> {
     let first_line = response
         .lines()
@@ -91,5 +134,15 @@ fn parse_status_code(response: &str) -> Result<u16, String> {
 
 #[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
 pub fn http_get_status(_url: &str) -> Result<u16, String> {
+    Err("socket-extension is only available for wasm32 targets".to_string())
+}
+
+#[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
+pub fn http_get_body(_url: &str) -> Result<(u16, Vec<u8>), String> {
+    Err("socket-extension is only available for wasm32 targets".to_string())
+}
+
+#[cfg(not(all(feature = "socket-extension", target_arch = "wasm32")))]
+pub fn http_post_status(_url: &str, _body: &[u8], _content_type: &str) -> Result<u16, String> {
     Err("socket-extension is only available for wasm32 targets".to_string())
 }

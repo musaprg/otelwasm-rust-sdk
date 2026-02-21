@@ -2,14 +2,18 @@ package go_harness
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/otelwasm/otelwasm/wasmplugin"
+	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
@@ -283,6 +287,136 @@ func TestRustGuestSocketExporterE2E(t *testing.T) {
 	})
 }
 
+func TestRustGuestOtlpHTTPExporterE2E(t *testing.T) {
+	if os.Getenv("OTELWASM_RUN_SOCKET_E2E") != "1" {
+		t.Skip("socket e2e test disabled; set OTELWASM_RUN_SOCKET_E2E=1 to enable")
+	}
+
+	wasmPath := os.Getenv("OTELWASM_OTLPHTTP_EXPORTER_WASM_PATH")
+	if wasmPath == "" {
+		t.Fatal("OTELWASM_OTLPHTTP_EXPORTER_WASM_PATH must be set when socket e2e is enabled")
+	}
+
+	type requestInfo struct {
+		path        string
+		contentType string
+		bodyLen     int
+	}
+	requests := make(chan requestInfo, 3)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("otlphttp exporter e2e skipped: failed to bind local listener: %v", err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		requests <- requestInfo{
+			path:        r.URL.Path,
+			contentType: r.Header.Get("Content-Type"),
+			bodyLen:     len(body),
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := newOTLPHTTPExporterPlugin(t, ctx, wasmPath, server.URL)
+
+	if _, err := plugin.ConsumeTraces(ctx, newTraces("otlphttp-traces")); err != nil {
+		t.Fatalf("ConsumeTraces failed: %v", err)
+	}
+	if _, err := plugin.ConsumeMetrics(ctx, newMetrics()); err != nil {
+		t.Fatalf("ConsumeMetrics failed: %v", err)
+	}
+	if _, err := plugin.ConsumeLogs(ctx, newLogs("otlphttp-logs")); err != nil {
+		t.Fatalf("ConsumeLogs failed: %v", err)
+	}
+
+	got := map[string]requestInfo{}
+	for i := 0; i < 3; i++ {
+		select {
+		case req := <-requests:
+			got[req.path] = req
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for exporter HTTP requests")
+		}
+	}
+
+	for _, path := range []string{"/v1/traces", "/v1/metrics", "/v1/logs"} {
+		req, ok := got[path]
+		if !ok {
+			t.Fatalf("missing request to %s", path)
+		}
+		if req.contentType != "application/x-protobuf" {
+			t.Fatalf("unexpected content-type for %s: %s", path, req.contentType)
+		}
+		if req.bodyLen == 0 {
+			t.Fatalf("empty payload sent to %s", path)
+		}
+	}
+}
+
+func TestRustGuestWebhookEventReceiverE2E(t *testing.T) {
+	if os.Getenv("OTELWASM_RUN_SOCKET_E2E") != "1" {
+		t.Skip("socket e2e test disabled; set OTELWASM_RUN_SOCKET_E2E=1 to enable")
+	}
+
+	wasmPath := os.Getenv("OTELWASM_WEBHOOK_EVENT_RECEIVER_WASM_PATH")
+	if wasmPath == "" {
+		t.Fatal("OTELWASM_WEBHOOK_EVENT_RECEIVER_WASM_PATH must be set when socket e2e is enabled")
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("webhook receiver e2e skipped: failed to bind local listener: %v", err)
+	}
+	payload := []byte(`{"event":"build.completed","status":"ok"}`)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/webhook" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	ctx := context.Background()
+	plugin := newWebhookEventReceiverPlugin(t, ctx, wasmPath, server.URL+"/webhook")
+
+	logsCh := make(chan plog.Logs, 1)
+	stack := &wasmplugin.Stack{
+		PluginConfigJSON: plugin.PluginConfigJSON,
+		OnResultLogsChange: func(ld plog.Logs) {
+			logsCh <- ld
+		},
+	}
+	if _, err := plugin.ProcessFunctionCall(ctx, "otelwasm_start_logs_receiver", stack); err != nil {
+		t.Fatalf("otelwasm_start_logs_receiver failed: %v", err)
+	}
+
+	var received plog.Logs
+	select {
+	case received = <-logsCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for webhook receiver output logs")
+	}
+
+	record := received.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	if body := record.Body().AsString(); body != string(payload) {
+		t.Fatalf("unexpected log body: %q", body)
+	}
+	urlAttr, ok := record.Attributes().Get("webhook.event_url")
+	if !ok || urlAttr.AsString() != server.URL+"/webhook" {
+		t.Fatalf("unexpected webhook.event_url attribute: ok=%v value=%s", ok, urlAttr.AsString())
+	}
+}
+
 func newTraces(spanName string) ptrace.Traces {
 	td := ptrace.NewTraces()
 	rs := td.ResourceSpans().AppendEmpty()
@@ -290,6 +424,25 @@ func newTraces(spanName string) ptrace.Traces {
 	span := ss.Spans().AppendEmpty()
 	span.SetName(spanName)
 	return td
+}
+
+func newMetrics() pmetric.Metrics {
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	sm := rm.ScopeMetrics().AppendEmpty()
+	metric := sm.Metrics().AppendEmpty()
+	metric.SetName("requests_total")
+	metric.SetEmptySum().SetIsMonotonic(true)
+	return md
+}
+
+func newLogs(body string) plog.Logs {
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	sl := rl.ScopeLogs().AppendEmpty()
+	record := sl.LogRecords().AppendEmpty()
+	record.Body().SetStr(body)
+	return ld
 }
 
 func newSocketExporterPlugin(t *testing.T, ctx context.Context, wasmPath, healthcheckURL string) *wasmplugin.WasmPlugin {
@@ -307,6 +460,79 @@ func newSocketExporterPlugin(t *testing.T, ctx context.Context, wasmPath, health
 		"otelwasm_start",
 		"otelwasm_shutdown",
 		"otelwasm_consume_traces",
+	})
+	if err != nil {
+		t.Fatalf("new wasm plugin: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = plugin.Shutdown(context.Background())
+	})
+
+	startRes, err := plugin.ProcessFunctionCall(ctx, "otelwasm_start", &wasmplugin.Stack{
+		PluginConfigJSON: plugin.PluginConfigJSON,
+	})
+	if err != nil {
+		t.Fatalf("otelwasm_start failed: %v", err)
+	}
+	if len(startRes) == 0 || startRes[0] != 0 {
+		t.Fatalf("otelwasm_start returned non-success status: %v", startRes)
+	}
+	return plugin
+}
+
+func newOTLPHTTPExporterPlugin(t *testing.T, ctx context.Context, wasmPath, endpoint string) *wasmplugin.WasmPlugin {
+	t.Helper()
+
+	cfg := &wasmplugin.Config{
+		Path: wasmPath,
+		PluginConfig: wasmplugin.PluginConfig{
+			"endpoint": endpoint,
+		},
+	}
+	cfg.RuntimeConfig.Default()
+
+	plugin, err := wasmplugin.NewWasmPlugin(ctx, cfg, []string{
+		"otelwasm_start",
+		"otelwasm_shutdown",
+		"otelwasm_consume_traces",
+		"otelwasm_consume_metrics",
+		"otelwasm_consume_logs",
+	})
+	if err != nil {
+		t.Fatalf("new wasm plugin: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = plugin.Shutdown(context.Background())
+	})
+
+	startRes, err := plugin.ProcessFunctionCall(ctx, "otelwasm_start", &wasmplugin.Stack{
+		PluginConfigJSON: plugin.PluginConfigJSON,
+	})
+	if err != nil {
+		t.Fatalf("otelwasm_start failed: %v", err)
+	}
+	if len(startRes) == 0 || startRes[0] != 0 {
+		t.Fatalf("otelwasm_start returned non-success status: %v", startRes)
+	}
+	return plugin
+}
+
+func newWebhookEventReceiverPlugin(t *testing.T, ctx context.Context, wasmPath, eventURL string) *wasmplugin.WasmPlugin {
+	t.Helper()
+
+	cfg := &wasmplugin.Config{
+		Path: wasmPath,
+		PluginConfig: wasmplugin.PluginConfig{
+			"event_url":  eventURL,
+			"max_events": 1,
+		},
+	}
+	cfg.RuntimeConfig.Default()
+
+	plugin, err := wasmplugin.NewWasmPlugin(ctx, cfg, []string{
+		"otelwasm_start",
+		"otelwasm_shutdown",
+		"otelwasm_start_logs_receiver",
 	})
 	if err != nil {
 		t.Fatalf("new wasm plugin: %v", err)

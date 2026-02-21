@@ -28,12 +28,48 @@ pub trait TracesExporter: Default + Send + 'static {
     }
 }
 
+pub trait TelemetryExporter: Default + Send + 'static {
+    const SUPPORTED_TELEMETRY: i32;
+
+    fn start(&mut self, _config: Value) -> Result<(), Status> {
+        Ok(())
+    }
+
+    fn export_traces(&mut self, _data: &[u8]) -> Result<(), Status> {
+        Err(Status::error("traces export is not supported"))
+    }
+
+    fn export_metrics(&mut self, _data: &[u8]) -> Result<(), Status> {
+        Err(Status::error("metrics export is not supported"))
+    }
+
+    fn export_logs(&mut self, _data: &[u8]) -> Result<(), Status> {
+        Err(Status::error("logs export is not supported"))
+    }
+
+    fn shutdown(&mut self) -> Result<(), Status> {
+        Ok(())
+    }
+}
+
 pub trait TracesReceiver: Default + Send + 'static {
     fn start(&mut self, _config: Value) -> Result<(), Status> {
         Ok(())
     }
 
     fn produce_traces(&mut self) -> Result<Option<Vec<u8>>, Status>;
+
+    fn shutdown(&mut self) -> Result<(), Status> {
+        Ok(())
+    }
+}
+
+pub trait LogsReceiver: Default + Send + 'static {
+    fn start(&mut self, _config: Value) -> Result<(), Status> {
+        Ok(())
+    }
+
+    fn produce_logs(&mut self) -> Result<Option<Vec<u8>>, Status>;
 
     fn shutdown(&mut self) -> Result<(), Status> {
         Ok(())
@@ -115,6 +151,58 @@ impl<E: TracesExporter> ExporterRuntime<E> {
     }
 }
 
+pub struct TelemetryExporterRuntime<E: TelemetryExporter> {
+    exporter: E,
+}
+
+impl<E: TelemetryExporter> TelemetryExporterRuntime<E> {
+    pub fn new() -> Self {
+        Self {
+            exporter: E::default(),
+        }
+    }
+
+    pub fn start(&mut self) -> i32 {
+        let config = match parse_plugin_config() {
+            Ok(config) => config,
+            Err(status) => return status_to_code(Err(status)),
+        };
+
+        status_to_code(self.exporter.start(config))
+    }
+
+    pub fn shutdown(&mut self) -> i32 {
+        status_to_code(self.exporter.shutdown())
+    }
+
+    pub fn consume_traces(&mut self, data_ptr: i32, data_size: i32) -> i32 {
+        let data = match memory::take_ownership(data_ptr, data_size) {
+            Ok(data) => data,
+            Err(status) => return status_to_code(Err(status)),
+        };
+
+        status_to_code(self.exporter.export_traces(&data))
+    }
+
+    pub fn consume_metrics(&mut self, data_ptr: i32, data_size: i32) -> i32 {
+        let data = match memory::take_ownership(data_ptr, data_size) {
+            Ok(data) => data,
+            Err(status) => return status_to_code(Err(status)),
+        };
+
+        status_to_code(self.exporter.export_metrics(&data))
+    }
+
+    pub fn consume_logs(&mut self, data_ptr: i32, data_size: i32) -> i32 {
+        let data = match memory::take_ownership(data_ptr, data_size) {
+            Ok(data) => data,
+            Err(status) => return status_to_code(Err(status)),
+        };
+
+        status_to_code(self.exporter.export_logs(&data))
+    }
+}
+
 pub struct ReceiverRuntime<R: TracesReceiver> {
     receiver: R,
 }
@@ -147,6 +235,48 @@ impl<R: TracesReceiver> ReceiverRuntime<R> {
 
             match self.receiver.produce_traces() {
                 Ok(Some(out)) => host::set_result_traces(&out),
+                Ok(None) => return,
+                Err(status) => {
+                    report_status_reason(&status);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+pub struct LogsReceiverRuntime<R: LogsReceiver> {
+    receiver: R,
+}
+
+impl<R: LogsReceiver> LogsReceiverRuntime<R> {
+    pub fn new() -> Self {
+        Self {
+            receiver: R::default(),
+        }
+    }
+
+    pub fn start(&mut self) -> i32 {
+        let config = match parse_plugin_config() {
+            Ok(config) => config,
+            Err(status) => return status_to_code(Err(status)),
+        };
+
+        status_to_code(self.receiver.start(config))
+    }
+
+    pub fn shutdown(&mut self) -> i32 {
+        status_to_code(self.receiver.shutdown())
+    }
+
+    pub fn start_logs_receiver(&mut self) {
+        loop {
+            if host::get_shutdown_requested() {
+                return;
+            }
+
+            match self.receiver.produce_logs() {
+                Ok(Some(out)) => host::set_result_logs(&out),
                 Ok(None) => return,
                 Err(status) => {
                     report_status_reason(&status);

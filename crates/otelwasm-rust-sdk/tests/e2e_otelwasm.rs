@@ -55,6 +55,11 @@ fn e2e_otelwasm_can_run_rust_guest() {
             &workspace_root,
             "otelwasm-rust-example-traces-socket-exporter",
         );
+        build_wasm_package(&workspace_root, "otelwasm-rust-example-otlphttpexporter");
+        build_wasm_package(
+            &workspace_root,
+            "otelwasm-rust-example-webhookeventreceiver",
+        );
     }
 
     let processor_wasm_path = wasm_path(
@@ -73,6 +78,14 @@ fn e2e_otelwasm_can_run_rust_guest() {
         &workspace_root,
         "otelwasm_rust_example_traces_socket_exporter.wasm",
     );
+    let otlp_http_exporter_wasm_path = wasm_path(
+        &workspace_root,
+        "otelwasm_rust_example_otlphttpexporter.wasm",
+    );
+    let webhook_event_receiver_wasm_path = wasm_path(
+        &workspace_root,
+        "otelwasm_rust_example_webhookeventreceiver.wasm",
+    );
     for path in [
         &processor_wasm_path,
         &exporter_wasm_path,
@@ -90,6 +103,16 @@ fn e2e_otelwasm_can_run_rust_guest() {
             "expected guest wasm binary to exist at {}",
             socket_exporter_wasm_path.display()
         );
+        assert!(
+            otlp_http_exporter_wasm_path.exists(),
+            "expected guest wasm binary to exist at {}",
+            otlp_http_exporter_wasm_path.display()
+        );
+        assert!(
+            webhook_event_receiver_wasm_path.exists(),
+            "expected guest wasm binary to exist at {}",
+            webhook_event_receiver_wasm_path.display()
+        );
     }
 
     let go_harness_dir = workspace_root.join("e2e").join("go_harness");
@@ -104,10 +127,20 @@ fn e2e_otelwasm_can_run_rust_guest() {
         .env("GOCACHE", &go_cache_dir)
         .current_dir(&go_harness_dir);
     if run_socket_e2e {
-        go_test.env("OTELWASM_RUN_SOCKET_E2E", "1").env(
-            "OTELWASM_SOCKET_EXPORTER_WASM_PATH",
-            &socket_exporter_wasm_path,
-        );
+        go_test
+            .env("OTELWASM_RUN_SOCKET_E2E", "1")
+            .env(
+                "OTELWASM_SOCKET_EXPORTER_WASM_PATH",
+                &socket_exporter_wasm_path,
+            )
+            .env(
+                "OTELWASM_OTLPHTTP_EXPORTER_WASM_PATH",
+                &otlp_http_exporter_wasm_path,
+            )
+            .env(
+                "OTELWASM_WEBHOOK_EVENT_RECEIVER_WASM_PATH",
+                &webhook_event_receiver_wasm_path,
+            );
     }
     let test_status = go_test.status().expect("failed to execute go test");
     assert!(
